@@ -27,8 +27,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Set up templates
 templates = Jinja2Templates(directory="templates")
 
-# Simple in-memory job store (Use Redis for true production scaling)
-# Structure: job_id -> {status: str, file_path: str, filename: str, error: str}
+# Simple in-memory job store
 jobs: Dict[str, dict] = {}
 
 # --- Pydantic Models ---
@@ -56,19 +55,34 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
     os.makedirs(job_dir, exist_ok=True)
     
     jobs[job_id]["status"] = "processing"
+    jobs[job_id]["progress"] = 0
     
-    # Configure yt-dlp
-    # We use a custom output template to ensure we know where the file lands
+    # Output template
     out_tmpl = os.path.join(job_dir, '%(title)s.%(ext)s')
     
+    # Progress hook to update job status
+    def progress_hook(d):
+        if d['status'] == 'downloading':
+            try:
+                # Robust calculation: Use bytes instead of parsing strings
+                total = d.get('total_bytes') or d.get('total_bytes_estimate')
+                downloaded = d.get('downloaded_bytes', 0)
+                if total:
+                    p = (downloaded / total) * 100
+                    jobs[job_id]["progress"] = p
+            except Exception:
+                pass
+        elif d['status'] == 'finished':
+            jobs[job_id]["progress"] = 99  # Set to 99, wait for ffmpeg merge
+
     ydl_opts = {
         'outtmpl': out_tmpl,
         'quiet': True,
         'no_warnings': True,
+        'progress_hooks': [progress_hook],
     }
 
     if is_audio_only:
-        # Audio conversion settings
         ydl_opts.update({
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -78,22 +92,19 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
             }],
         })
     else:
-        # Video settings: Download specific format + best audio and merge
+        # Download specific video + best audio
         ydl_opts.update({
             'format': f"{format_id}+bestaudio/best" if format_id != 'best' else "bestvideo+bestaudio/best",
-            'merge_output_format': 'mp4',  # Ensure final container is mp4
+            'merge_output_format': 'mp4',
         })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             
-            # Find the generated file
             if 'requested_downloads' in info:
                 final_filename = info['requested_downloads'][0]['filepath']
             else:
-                # Fallback for simple downloads
-                # We need to scan the dir because the filename might contain sanitized chars
                 files = os.listdir(job_dir)
                 if not files:
                     raise Exception("File not found after download")
@@ -102,21 +113,19 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
             jobs[job_id]["file_path"] = final_filename
             jobs[job_id]["filename"] = os.path.basename(final_filename)
             jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
             
     except Exception as e:
         logger.error(f"Download failed for {job_id}: {str(e)}")
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
-        # Cleanup empty dir
         shutil.rmtree(job_dir, ignore_errors=True)
 
 # --- Routes ---
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root():
-    # Serving the HTML file directly for simplicity in this structure
-    with open("index.html", "r") as f:
-        return f.read()
+async def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/api/info")
 async def get_video_info(request: VideoRequest):
@@ -129,42 +138,43 @@ async def get_video_info(request: VideoRequest):
         formats = []
         seen_res = set()
         
-        # Filter and organize formats for the UI
         for f in info.get('formats', []):
-            # We want video files that have a resolution, exclude audio-only for the video list
             if f.get('vcodec') != 'none' and f.get('height'):
                 res = f"{f['height']}p"
                 ext = f['ext']
                 
-                # Deduplicate roughly by resolution
                 if res not in seen_res and ext in ['mp4', 'webm']:
+                    fs = f.get('filesize')
+                    if fs is None:
+                        fs = f.get('filesize_approx')
+                    
                     formats.append({
                         "format_id": f['format_id'],
                         "resolution": res,
                         "ext": ext,
-                        "filesize": f.get('filesize_approx', 0)
+                        "filesize": fs if fs else 0
                     })
                     seen_res.add(res)
         
-        # Sort by height (resolution) descending
         formats.sort(key=lambda x: int(x['resolution'][:-1]), reverse=True)
 
         return {
             "title": info.get('title'),
             "thumbnail": info.get('thumbnail'),
             "duration": info.get('duration'),
-            "formats": formats
+            "formats": formats,
+            "uploader": info.get('uploader')
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/queue")
 async def queue_download(request: DownloadRequest, background_tasks: BackgroundTasks):
-    """Create a download job"""
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "status": "queued",
-        "url": request.url
+        "url": request.url,
+        "progress": 0
     }
     
     background_tasks.add_task(
@@ -179,19 +189,18 @@ async def queue_download(request: DownloadRequest, background_tasks: BackgroundT
 
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    """Poll this endpoint to check if download is ready"""
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
     return {
         "status": job["status"], 
+        "progress": job.get("progress", 0),
         "error": job.get("error")
     }
 
 @app.get("/api/download/{job_id}")
 async def download_file(job_id: str, background_tasks: BackgroundTasks):
-    """Serve the file and schedule cleanup"""
     job = jobs.get(job_id)
     if not job or job["status"] != "completed":
         raise HTTPException(status_code=400, detail="File not ready or job failed")
@@ -199,12 +208,9 @@ async def download_file(job_id: str, background_tasks: BackgroundTasks):
     file_path = job["file_path"]
     filename = job["filename"]
     
-    # Schedule cleanup of the specific job directory after response is sent
-    # Note: simple os.remove won't remove the directory, so we wrap it
     def cleanup_job_dir():
         parent_dir = os.path.dirname(file_path)
         shutil.rmtree(parent_dir, ignore_errors=True)
-        # Also remove from memory
         jobs.pop(job_id, None)
 
     background_tasks.add_task(cleanup_job_dir)

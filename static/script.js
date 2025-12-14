@@ -1,6 +1,7 @@
 let currentFormats = [];
 let selectedFormat = null;
 let isAudioMode = false;
+let isDownloading = false; // Flag to track download state
 
 // --- Video Player Logic ---
 function getVideoId(url) {
@@ -10,6 +11,7 @@ function getVideoId(url) {
 }
 
 function loadVideoPreview() {
+    if(isDownloading) return; // Prevent interaction during download
     const url = document.getElementById('urlInput').value;
     const videoId = getVideoId(url);
     if (!videoId) return;
@@ -32,7 +34,7 @@ function resetPlayer() {
 
 async function fetchInfo() {
     const url = document.getElementById('urlInput').value;
-    if(!url) return;
+    if(!url || isDownloading) return;
 
     toggleLoading(true);
     document.getElementById('resultArea').classList.add('hidden');
@@ -87,6 +89,8 @@ function renderInfo(data) {
 }
 
 function switchTab(mode) {
+    if(isDownloading) return; // Lock tabs during download
+
     isAudioMode = mode === 'audio';
     
     const activeClass = "bg-slate-100 text-black shadow-lg";
@@ -109,7 +113,6 @@ function switchTab(mode) {
     updateDownloadBtn(false);
 
     if (isAudioMode) {
-        // ... (Logic for Audio Cards) ...
         const div = document.createElement('div');
         div.className = "p-4 bg-white/5 hover:bg-white/10 rounded-xl cursor-pointer border border-white/5 hover:border-blue-400/50 transition-all flex items-center justify-between group";
         div.innerHTML = `
@@ -163,6 +166,8 @@ function switchTab(mode) {
 }
 
 function selectFormat(el, id) {
+    if(isDownloading) return; // Prevent changing selection during download
+
     document.querySelectorAll('#formatList > div').forEach(d => {
         d.classList.remove('border-red-500', 'bg-white/10', 'border-blue-500');
         d.querySelector('.check-circle div').classList.add('opacity-0', 'scale-0');
@@ -178,30 +183,62 @@ function selectFormat(el, id) {
 
 function updateDownloadBtn(enabled) {
     const btn = document.getElementById('downloadBtn');
+    if (isDownloading) {
+        btn.disabled = true;
+        return;
+    }
     btn.disabled = !enabled;
     if(enabled) {
         btn.innerHTML = `<span class="relative z-10 flex items-center justify-center gap-3 text-lg"><i class="fas fa-bolt"></i><span>Download Now</span></span><div class="absolute inset-0 h-full w-full bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>`;
-        btn.classList.remove('cursor-wait');
+        btn.classList.remove('cursor-wait', 'opacity-50');
+    }
+}
+
+// Helper to lock/unlock UI
+function setDownloadingState(active) {
+    isDownloading = active;
+    const formatList = document.getElementById('formatList');
+    const tabs = document.querySelector('.flex.p-1'); // The tab container
+    const input = document.getElementById('urlInput');
+    const fetchBtn = document.getElementById('fetchBtn');
+
+    if (active) {
+        formatList.classList.add('disabled-area');
+        tabs.classList.add('disabled-area');
+        input.disabled = true;
+        input.parentElement.classList.add('opacity-50');
+        fetchBtn.disabled = true;
+    } else {
+        formatList.classList.remove('disabled-area');
+        tabs.classList.remove('disabled-area');
+        input.disabled = false;
+        input.parentElement.classList.remove('opacity-50');
+        fetchBtn.disabled = false;
     }
 }
 
 async function startDownload() {
-    // ... (Your startDownload logic here, same as original) ...
-    // Note: Copied for brevity, ensure you copy the full function body
     const url = document.getElementById('urlInput').value;
     const btn = document.getElementById('downloadBtn');
     const statusArea = document.getElementById('statusArea');
     const statusText = document.getElementById('statusText');
     const progressBar = document.getElementById('progressBar');
 
+    // 1. Lock UI
+    setDownloadingState(true);
+
     btn.disabled = true;
-    btn.classList.add('cursor-wait');
-    btn.innerHTML = `<span class="flex items-center gap-2"><i class="fas fa-circle-notch fa-spin"></i> Converting...</span>`;
+    btn.classList.add('cursor-wait', 'opacity-50');
+    btn.innerHTML = `<span class="flex items-center gap-2"><i class="fas fa-circle-notch fa-spin"></i> Preparing...</span>`;
     
     statusArea.classList.remove('hidden');
-    statusText.textContent = "Server is merging streams...";
+    statusText.textContent = "Initializing...";
     statusText.className = "text-sm font-mono text-yellow-400 animate-pulse";
-    progressBar.className = "bg-gradient-to-r from-yellow-500 to-orange-500 h-full w-full animate-[shimmer_2s_infinite_linear]";
+    
+    // --- CHANGE 1: Initialize Simulation ---
+    let simulatedProgress = 5; // Start at 5% immediately
+    progressBar.style.width = '1%';
+    progressBar.className = "bg-gradient-to-r from-yellow-500 to-orange-500 h-full w-full transition-all duration-300";
 
     try {
         const res = await fetch('/api/queue', {
@@ -218,23 +255,45 @@ async function startDownload() {
         const jobId = data.job_id;
 
         const pollInterval = setInterval(async () => {
+            // --- CHANGE 2: Run Simulation Step ---
+            // Slowly increase progress up to 85% to fake activity
+            if (simulatedProgress < 85) {
+                 simulatedProgress += (Math.random() * 1.79); 
+            }
+
             try {
                 const statusRes = await fetch(`/api/status/${jobId}`);
                 const statusData = await statusRes.json();
 
+                // --- CHANGE 3: Sync with Real Data ---
+                // Only use real data if it catches up to or passes our simulation
+                if (statusData.progress > 0) {
+                    if (statusData.progress > simulatedProgress) {
+                        simulatedProgress = statusData.progress;
+                    }
+                }
+                
+                // Update UI with the calculated value
+                progressBar.style.width = `${simulatedProgress}%`;
+                statusText.textContent = `Downloading... ${Math.floor(simulatedProgress)}%`;
+
                 if (statusData.status === 'completed') {
                     clearInterval(pollInterval);
                     
+                    // Snap to 100% on completion
                     statusText.textContent = "Finalizing Download...";
                     statusText.className = "text-sm font-mono text-emerald-400";
                     progressBar.className = "bg-gradient-to-r from-emerald-400 to-green-500 h-full w-full";
+                    progressBar.style.width = '100%'; 
                     btn.innerHTML = `<span class="flex items-center gap-2"><i class="fas fa-check"></i> Complete</span>`;
                     
                     window.location.href = `/api/download/${jobId}`;
                     
                     setTimeout(() => {
+                        setDownloadingState(false);
                         updateDownloadBtn(true);
                         statusArea.classList.add('hidden');
+                        progressBar.style.width = '0%';
                     }, 4000);
 
                 } else if (statusData.status === 'failed') {
@@ -245,7 +304,7 @@ async function startDownload() {
                 clearInterval(pollInterval);
                 handleError(pollErr.message);
             }
-        }, 1000);
+        }, 800);
 
     } catch (e) {
         handleError(e.message);
@@ -256,7 +315,10 @@ async function startDownload() {
         statusText.className = "text-sm font-mono text-red-500";
         progressBar.className = "bg-red-500 h-full w-full";
         btn.innerHTML = `<span class="flex items-center gap-2"><i class="fas fa-times"></i> Failed</span>`;
-        setTimeout(() => updateDownloadBtn(true), 3000);
+        setTimeout(() => {
+            setDownloadingState(false);
+            updateDownloadBtn(true);
+        }, 3000);
     }
 }
 

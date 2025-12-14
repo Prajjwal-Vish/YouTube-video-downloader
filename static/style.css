@@ -60,3 +60,14 @@ body {
      0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
+.disabled-area {
+    opacity: 0.5;
+    pointer-events: none;
+    filter: grayscale(0.5);
+    transition: all 0.3s ease;
+}
+
+/* Ensure progress bar transitions smoothly */
+#progressBar {
+    transition: width 0.3s ease-in-out;
+}
