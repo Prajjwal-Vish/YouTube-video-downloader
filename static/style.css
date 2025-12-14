@@ -1,0 +1,62 @@
+@import url('[https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap](https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap)');
+
+body {
+    font-family: 'Outfit', sans-serif;
+    background-color: #0f172a;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+/* Glassmorphism */
+.glass-panel {
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Animations */
+@keyframes float {
+    0% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+    100% { transform: translateY(0px); }
+}
+.animate-float {
+    animation: float 6s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.2); }
+    50% { box-shadow: 0 0 40px rgba(239, 68, 68, 0.6); }
+}
+.glow-effect:focus-within {
+    animation: pulse-glow 2s infinite;
+}
+
+/* Dynamic Background Overlay */
+#bg-overlay {
+    transition: background-image 1s ease-in-out, opacity 1s ease-in-out;
+}
+
+/* Shimmer Loading Effects */
+@keyframes shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+}
+@keyframes shimmer_linear {
+     0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
