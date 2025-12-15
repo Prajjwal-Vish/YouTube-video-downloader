@@ -40,6 +40,16 @@ class DownloadRequest(BaseModel):
     is_audio_only: bool = False
 
 # --- Helpers ---
+def get_cookie_path():
+    """Check for cookies in common locations"""
+    # 1. Render Secret File path
+    if os.path.exists("/etc/secrets/cookies.txt"):
+        return "/etc/secrets/cookies.txt"
+    # 2. Local root path (for local dev)
+    if os.path.exists("cookies.txt"):
+        return "cookies.txt"
+    return None
+
 def cleanup_file(path: str):
     """Background task to remove file after download"""
     try:
@@ -81,6 +91,11 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
         'no_warnings': True,
         'progress_hooks': [progress_hook],
     }
+
+    # Inject cookies if found
+    cookie_path = get_cookie_path()
+    if cookie_path:
+        ydl_opts['cookiefile'] = cookie_path
 
     if is_audio_only:
         ydl_opts.update({
@@ -132,6 +147,12 @@ async def get_video_info(request: VideoRequest):
     """Fetch metadata and available formats"""
     try:
         ydl_opts = {'quiet': True, 'no_warnings': True}
+        
+        # Inject cookies if found
+        cookie_path = get_cookie_path()
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path
+            
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(request.url, download=False)
         
