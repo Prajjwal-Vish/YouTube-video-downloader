@@ -41,13 +41,29 @@ class DownloadRequest(BaseModel):
 
 # --- Helpers ---
 def get_cookie_path():
-    """Check for cookies in common locations"""
-    # 1. Render Secret File path
-    if os.path.exists("/etc/secrets/cookies.txt"):
-        return "/etc/secrets/cookies.txt"
-    # 2. Local root path (for local dev)
-    if os.path.exists("cookies.txt"):
-        return "cookies.txt"
+    """
+    Locate cookies. If they are in a read-only directory (Render Secrets),
+    copy them to a writable location so yt-dlp doesn't crash when trying to lock/write.
+    """
+    secret_path = "/etc/secrets/cookies.txt"
+    writable_path = "cookies.txt" # This path is writable in the container
+
+    # 1. Check if we are on Render and have secrets
+    if os.path.exists(secret_path):
+        try:
+            # Copy the read-only file to a writable location
+            # This overwrites any existing local cookies.txt to ensure we use the latest secret
+            shutil.copyfile(secret_path, writable_path)
+            return writable_path
+        except Exception as e:
+            logger.error(f"Error copying cookies from secrets: {e}")
+            # Fallback to secret path (might crash, but worth a try)
+            return secret_path
+
+    # 2. Check for local dev file
+    if os.path.exists(writable_path):
+        return writable_path
+
     return None
 
 def cleanup_file(path: str):
