@@ -54,6 +54,7 @@ def get_cookie_path():
             # Copy the read-only file to a writable location
             # This overwrites any existing local cookies.txt to ensure we use the latest secret
             shutil.copyfile(secret_path, writable_path)
+            logger.info(f"Cookies copied from {secret_path} to {writable_path}")
             return writable_path
         except Exception as e:
             logger.error(f"Error copying cookies from secrets: {e}")
@@ -62,8 +63,10 @@ def get_cookie_path():
 
     # 2. Check for local dev file
     if os.path.exists(writable_path):
+        logger.info(f"Using local cookies from {writable_path}")
         return writable_path
 
+    logger.warning("No cookies.txt found. YouTube might block requests.")
     return None
 
 def cleanup_file(path: str):
@@ -74,6 +77,27 @@ def cleanup_file(path: str):
             logger.info(f"Cleaned up file: {path}")
     except Exception as e:
         logger.error(f"Error cleaning up {path}: {e}")
+
+def get_ydl_opts(basic_mode=False):
+    """
+    Centralized yt-dlp options generator to ensure consistency.
+    Includes User-Agent spoofing to avoid bot detection.
+    """
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        # Spoof User-Agent to look like a real browser
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        # Force IPv4 as IPv6 often triggers bot detection on cloud servers
+        'source_address': '0.0.0.0',
+    }
+    
+    # Inject cookies if found
+    cookie_path = get_cookie_path()
+    if cookie_path:
+        opts['cookiefile'] = cookie_path
+        
+    return opts
 
 def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool):
     """Heavy lifting function running in background"""
@@ -86,11 +110,10 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
     # Output template
     out_tmpl = os.path.join(job_dir, '%(title)s.%(ext)s')
     
-    # Progress hook to update job status
+    # Progress hook
     def progress_hook(d):
         if d['status'] == 'downloading':
             try:
-                # Robust calculation: Use bytes instead of parsing strings
                 total = d.get('total_bytes') or d.get('total_bytes_estimate')
                 downloaded = d.get('downloaded_bytes', 0)
                 if total:
@@ -99,19 +122,16 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
             except Exception:
                 pass
         elif d['status'] == 'finished':
-            jobs[job_id]["progress"] = 99  # Set to 99, wait for ffmpeg merge
+            jobs[job_id]["progress"] = 99
 
-    ydl_opts = {
+    # Get base options
+    ydl_opts = get_ydl_opts()
+    
+    # Add download-specific options
+    ydl_opts.update({
         'outtmpl': out_tmpl,
-        'quiet': True,
-        'no_warnings': True,
         'progress_hooks': [progress_hook],
-    }
-
-    # Inject cookies if found
-    cookie_path = get_cookie_path()
-    if cookie_path:
-        ydl_opts['cookiefile'] = cookie_path
+    })
 
     if is_audio_only:
         ydl_opts.update({
@@ -123,7 +143,6 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
             }],
         })
     else:
-        # Download specific video + best audio
         ydl_opts.update({
             'format': f"{format_id}+bestaudio/best" if format_id != 'best' else "bestvideo+bestaudio/best",
             'merge_output_format': 'mp4',
@@ -162,12 +181,8 @@ async def read_root(request: Request):
 async def get_video_info(request: VideoRequest):
     """Fetch metadata and available formats"""
     try:
-        ydl_opts = {'quiet': True, 'no_warnings': True}
-        
-        # Inject cookies if found
-        cookie_path = get_cookie_path()
-        if cookie_path:
-            ydl_opts['cookiefile'] = cookie_path
+        # Get base options with User-Agent and Cookies
+        ydl_opts = get_ydl_opts()
             
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(request.url, download=False)
@@ -203,6 +218,8 @@ async def get_video_info(request: VideoRequest):
             "uploader": info.get('uploader')
         }
     except Exception as e:
+        # Detailed logging for debugging
+        logger.error(f"Info fetch failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/queue")
