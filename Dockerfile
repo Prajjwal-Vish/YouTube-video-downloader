@@ -3,10 +3,6 @@ FROM python:3.10-slim
 
 # 1. Install system dependencies
 # We specifically need FFmpeg for yt-dlp to merge audio/video and convert formats
-RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
 
 # 2. Set the working directory
 WORKDIR /app
