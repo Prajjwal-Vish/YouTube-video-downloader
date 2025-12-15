@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-yt-dlp
+yt-dlp @ git+https://www.google.com/search?q=https://github.com/yt-dlp/yt-dlp.git%40master
 jinja2
 python-multipart
 aiofiles
