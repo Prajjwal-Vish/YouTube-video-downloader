@@ -140,15 +140,16 @@ def get_cookie_path():
     writable_path = "cookies.txt" # This path is writable in the container
 
     # 1. Check Environment Variable (YOUTUBE_COOKIES_B64)
-    # This is often more reliable than file mounts on some platforms
     env_cookies = os.environ.get("YOUTUBE_COOKIES_B64")
     if env_cookies:
         try:
             # Decode and write to writable file
-            logger.info("Found YOUTUBE_COOKIES_B64. Decoding to local file...")
-            decoded_cookies = base64.b64decode(env_cookies)
-            with open(writable_path, "wb") as f:
-                f.write(decoded_cookies)
+            # Only log success once to avoid spamming logs
+            if not os.path.exists(writable_path):
+                logger.info("Found YOUTUBE_COOKIES_B64. Decoding to local file...")
+                decoded_cookies = base64.b64decode(env_cookies)
+                with open(writable_path, "wb") as f:
+                    f.write(decoded_cookies)
             return writable_path
         except Exception as e:
             logger.error(f"Failed to decode cookie env var: {e}")
@@ -157,22 +158,16 @@ def get_cookie_path():
     secret_path = "/etc/secrets/cookies.txt"
     if os.path.exists(secret_path):
         try:
-            # Copy the read-only file to a writable location
-            # This overwrites any existing local cookies.txt to ensure we use the latest secret
             shutil.copyfile(secret_path, writable_path)
-            logger.info(f"Cookies copied from {secret_path} to {writable_path}")
             return writable_path
         except Exception as e:
             logger.error(f"Error copying cookies from secrets: {e}")
-            # Fallback to secret path (might crash, but worth a try)
             return secret_path
 
     # 3. Check for local dev file
     if os.path.exists(writable_path):
-        logger.info(f"Using local cookies from {writable_path}")
         return writable_path
 
-    logger.warning("No cookies.txt found. YouTube might block requests.")
     return None
 
 def cleanup_file(path: str):
@@ -192,9 +187,7 @@ def get_ydl_opts(basic_mode=False):
     opts = {
         'quiet': True,
         'no_warnings': True,
-        # Spoof User-Agent to look like a real browser
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        # Force IPv4 as IPv6 often triggers bot detection on cloud servers
         'source_address': '0.0.0.0',
     }
     
@@ -249,8 +242,15 @@ def process_download(job_id: str, url: str, format_id: str, is_audio_only: bool)
             }],
         })
     else:
+        # Video settings
+        # CHANGED: Use a fallback chain for format selection
+        # 1. Try "format_id+bestaudio" (Best for video-only streams like 1080p)
+        # 2. Fallback to "format_id" (Best for combined streams like 360p/720p if muxed)
+        # 3. Fallback to "best"
+        target_format = f"{format_id}+bestaudio/{format_id}/best" if format_id != 'best' else "bestvideo+bestaudio/best"
+        
         ydl_opts.update({
-            'format': f"{format_id}+bestaudio/best" if format_id != 'best' else "bestvideo+bestaudio/best",
+            'format': target_format,
             'merge_output_format': 'mp4',
         })
 
@@ -287,7 +287,6 @@ async def read_root(request: Request):
 async def get_video_info(request: VideoRequest):
     """Fetch metadata and available formats"""
     try:
-        # Get base options with User-Agent and Cookies
         ydl_opts = get_ydl_opts()
             
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -324,7 +323,6 @@ async def get_video_info(request: VideoRequest):
             "uploader": info.get('uploader')
         }
     except Exception as e:
-        # Detailed logging for debugging
         logger.error(f"Info fetch failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
